@@ -19,10 +19,31 @@ const chatMessages = [{
 	(improving, worse, no change). "
 }]
 
-const createSummary = async (data, openai) => {
+const findUser = async (firstName, lastName, dbClient) => {
+	try {
+		const { data, error } = await dbClient
+			.from('patient_details')
+			.select(`*, patient_notes ( created_at, notes )`)
+			.eq('first_name', firstName)
+			.eq('last_name', lastName);
 
+		if (data.length === 0) {
+			console.log('No data found');
+			return '';
+		}
+		else {
+			console.log('Data found');
+			return data;
+		}
+	}
+	catch (err) {
+		console.error(err);
+	}
+}
 
-};
+const getUserDetails = (requestUrl) => {
+	return { firstName: requestUrl.searchParams.get('firstName'), lastName: requestUrl.searchParams.get('lastName') };
+}
 
 export default {
 	/**
@@ -33,76 +54,109 @@ export default {
 	 */
 
 	async fetch(request, env, ctx) {
-		const jsonRequest = request.json();
+		// Constants
+		let jsonString = "";
+		let openai = null;
 		const requestUrl = new URL(request.url);
-		console.log(requestUrl);
 
-		if (requestUrl.pathname === '/summary') {
+		// createResponse closure
+		const createResponse = async (data) => {
+			console.log('About to create response');
 
-			if (requestUrl.pathname === "/summary") {
-				console.log('About to fetch data ...')
-				const firstName = requestUrl.searchParams.get('firstName');
-				const lastName = requestUrl.searchParams.get('lastName');
+			chatMessages.push({
+				role: 'user',
+				content: data
+			});
 
-				const supabaseUrl = 'http://localhost:8000'
-				const supabaseKey = env.SUPABASE_KEY
-				const client = createClient(supabaseUrl, supabaseKey)
+			const response = await openai.chat.completions.create({
+				model: 'gpt-4',
+				messages: chatMessages,
+				temperature: 0.5,
+				frequency_penalty: 0.5
+			});
 
+			return response;
 
-				// const client = createClient(env.SUPABASE_URL, env.SUPABASE_API_KEY);
-				// const { data, error } = await client.from('patient_details')
-				// 	.select('*');
+		}
 
-				// let { data: patient_details, error } = await client
-				// 	.from('patient_details')
-				// 	.select('*')
+		// Create a new OpenAI client
+		try {
+			openai = new OpenAI({
+				apiKey: env.OPENAI_API_KEY,
+			});
 
-				const { data, error } = await client.from('patient_details').select(`*, patient_notes ( created_at, notes )`).eq('first_name', firstName).eq('last_name', lastName);
+		} catch (err) {
+			console.error(err);
+		}
 
-				if (error) {
-					return new Response(JSON.stringify(error));
-				}
-
-
-				const jsonResult = JSON.stringify(data); //  send back a summary
+		// Process endpoint
+		switch (requestUrl?.pathname) {
+			case "/summary":
+				console.log("Summary endpoint.")
+				const { firstName, lastName } = getUserDetails(requestUrl);
+				let dbClient = null;
 
 				try {
-					const openai = new OpenAI({
-						apiKey: env.OPENAI_API_KEY,
-					});
-
-					console.log('About to create summary');
-
-					chatMessages.push({
-						role: 'user',
-						content: `Please give a summary of ${jsonResult}`
-					});
-
-					const response = await openai.chat.completions.create({
-						model: 'gpt-4',
-						messages: chatMessages,
-						temperature: 0.5,
-						frequency_penalty: 0.5
-					});
-
-					console.log(response.choices[0].message.content);
-
-				} catch (err) {
+					dbClient = await createClient('http://localhost:8000', env.SUPABASE_KEY);
+				}
+				catch (err) {
 					console.error(err);
 				}
 
-				// const summary = createSummary(jsonResult, openai);
-				return new Response(jsonResult, {
+				const data = await findUser(firstName, lastName, dbClient);
+
+				jsonString = JSON.stringify(data);
+
+				if (jsonString !== '') {
+					const result = await createResponse(`Please create a summary for the following: ${jsonString}`);
+
+					if (result) {
+						chatMessages.push(result.choices[0].message)
+						console.log(chatMessages);
+					}
+
+				}
+
+				return new Response(chatMessages, {
 					headers: {
 						'Content-Type': 'application/json',
 					},
 				});
-			}
-		}
 
-		return new Response();
+			case "/chat":
+				// check that a summary has been created already  - should have one system message and one user message already
+				if (chatMessages.length === 2 || chatMessages.length > 2) {
+					console.log(chatMessages);
+					console.log(`Request pathname is /chat`)
+					try {
+						const requestData = await request.clone().json();
+						console.log('Request body:', requestData);
+
+						try {
+							const result = await createResponse(requestData.userQuestion);
+							if (result) {
+								chatMessages.push(result.choices[0].message)
+								console.log(chatMessages);
+							}
+
+							return new Response(result, {
+								headers: {
+									'Content-Type': 'application/json',
+								},
+							});
+						}
+						catch (e) {
+							return new Response(e);
+						}
+					}
+					catch (err) {
+						console.error(err);
+					}
+				}
+				return new Response(null);
+		}
 	}
-};
+}
 
 
 /**
