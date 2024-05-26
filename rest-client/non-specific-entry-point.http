@@ -1,0 +1,7 @@
+
+@localCloudflareWorker = http://localhost:8787
+
+###
+GET {{localCloudflareWorker}}
+
+###

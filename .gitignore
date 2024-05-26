@@ -69,6 +69,10 @@ web_modules/
 
 .eslintcache
 
+# Ignore eslint type files - I could include the cache one above but will leave as is
+.eslint*
+
+
 # Optional stylelint cache
 
 .stylelintcache
